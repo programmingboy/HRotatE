@@ -51,13 +51,21 @@ class KGEModel(nn.Module):
             b=self.embedding_range.item()
         )
         
-        
-        self.entity2_embedding = nn.Parameter(torch.zeros(nentity, self.entity_dim))
-        nn.init.uniform_(
-            tensor=self.entity2_embedding, 
-            a=-self.embedding_range.item(), 
-            b=self.embedding_range.item()
-        )
+        if model_name == 'HRotatE':
+            self.entity2_embedding = nn.Parameter(torch.zeros(nentity, self.entity_dim))
+            nn.init.uniform_(
+              tensor=self.entity2_embedding, 
+              a=-self.embedding_range.item(), 
+              b=self.embedding_range.item()
+          )
+          
+        else:
+            self.entity2_embedding = nn.Parameter(torch.zeros(nentity, self.entity_dim))
+            nn.init.uniform_(
+              tensor=self.entity_embedding, 
+              a=-self.embedding_range.item(), 
+              b=self.embedding_range.item()
+          )
         
         self.relation_embedding = nn.Parameter(torch.zeros(nrelation, self.relation_dim))
         nn.init.uniform_(
@@ -79,10 +87,13 @@ class KGEModel(nn.Module):
             self.modulus = nn.Parameter(torch.Tensor([[0.5 * self.embedding_range.item()]]))
         
         #Do not forget to modify this line when you add a new model in the "forward" function
-        if model_name not in ['TransE', 'DistMult', 'ComplEx', 'RotatE', 'pRotatE']:
+        if model_name not in ['TransE', 'DistMult', 'ComplEx', 'RotatE', 'pRotatE', 'HRotatE']:
             raise ValueError('model %s not supported' % model_name)
             
         if model_name == 'RotatE' and (not double_entity_embedding or double_relation_embedding):
+            raise ValueError('RotatE should use --double_entity_embedding')
+            
+        if model_name == 'HRotatE' and (not double_entity_embedding or double_relation_embedding):
             raise ValueError('RotatE should use --double_entity_embedding')
 
         if model_name == 'ComplEx' and (not double_entity_embedding or not double_relation_embedding):
@@ -240,54 +251,41 @@ class KGEModel(nn.Module):
             'DistMult': self.DistMult,
             'ComplEx': self.ComplEx,
             'RotatE': self.RotatE,
-            'pRotatE': self.pRotatE
+            'pRotatE': self.pRotatE,
+            'HRotatE': self.HRotatE
         }
         
         if self.model_name in model_func:
             #score = model_func[self.model_name](head, relation, tail, mode)
-            score = model_func[self.model_name](head, relation, tail, relation_inv, ht, th, mode)
+            if self.model_name == 'HRotatE':
+              score = model_func[self.model_name](head, relation, tail, relation_inv, ht, th, mode)
+            else:
+              score = model_func[self.model_name](head, relation, tail, mode)
         else:
             raise ValueError('model %s not supported' % self.model_name)
         
         return score
-    
-    def TransE(self, head, relation, tail, relation_inv, ht, th, mode):
+        
+        
+    def TransE(self, head, relation, tail, mode):
         if mode == 'head-batch':
-            score1 = head + (relation - tail)
+            score = head + (relation - tail)
         else:
-            score1 = (head + relation) - tail
-            
-        if mode == 'tail-batch':
-            score2 = ht + (relation_inv - th)
-        else:
-            score2 = (ht + relation_inv) - th
+            score = (head + relation) - tail
 
-        score1 = self.gamma.item() - torch.norm(score1, p=1, dim=2)
-        score2 = self.gamma.item() - torch.norm(score2, p=1, dim=2)
-        
-        score = (score1+score2)/2
-        
+        score = self.gamma.item() - torch.norm(score, p=1, dim=2)
         return score
 
-    def DistMult(self, head, relation, tail, relation_inv, ht, th, mode):
-      
+    def DistMult(self, head, relation, tail, mode):
         if mode == 'head-batch':
-            score1 = head * (relation * tail)
+            score = head * (relation * tail)
         else:
-            score1 = (head * relation) * tail
-            
-        if mode == 'tail-batch':
-            score2 = ht * (relation_inv * th)
-        else:
-            score2 = (ht * relation_inv) * th
+            score = (head * relation) * tail
 
-        score1 = score1.sum(dim = 2)
-        score2 = score2.sum(dim = 2)
-        
-        score = (score1+score2)/2
+        score = score.sum(dim = 2)
         return score
 
-    def ComplEx(self, head, relation, tail, relation_inv, ht, th, mode):
+    def ComplEx(self, head, relation, tail, mode):
         re_head, im_head = torch.chunk(head, 2, dim=2)
         re_relation, im_relation = torch.chunk(relation, 2, dim=2)
         re_tail, im_tail = torch.chunk(tail, 2, dim=2)
@@ -295,36 +293,68 @@ class KGEModel(nn.Module):
         if mode == 'head-batch':
             re_score = re_relation * re_tail + im_relation * im_tail
             im_score = re_relation * im_tail - im_relation * re_tail
-            score1 = re_head * re_score + im_head * im_score
+            score = re_head * re_score + im_head * im_score
         else:
             re_score = re_head * re_relation - im_head * im_relation
             im_score = re_head * im_relation + im_head * re_relation
-            score1 = re_score * re_tail + im_score * im_tail
+            score = re_score * re_tail + im_score * im_tail
 
-        score1 = score1.sum(dim = 2)
+        score = score.sum(dim = 2)
+        return score
         
+    def pRotatE(self, head, relation, tail, mode):
+        pi = 3.14159262358979323846
         
-        re_head, im_head = torch.chunk(ht, 2, dim=2)
-        re_relation, im_relation = torch.chunk(relation_inv, 2, dim=2)
-        re_tail, im_tail = torch.chunk(th, 2, dim=2)
+        #Make phases of entities and relations uniformly distributed in [-pi, pi]
+
+        phase_head = head/(self.embedding_range.item()/pi)
+        phase_relation = relation/(self.embedding_range.item()/pi)
+        phase_tail = tail/(self.embedding_range.item()/pi)
+
+        if mode == 'head-batch':
+            score = phase_head + (phase_relation - phase_tail)
+        else:
+            score = (phase_head + phase_relation) - phase_tail
+
+        score = torch.sin(score)            
+        score = torch.abs(score)
+
+        score = self.gamma.item() - score.sum(dim = 2) * self.modulus
+        return score
+    
         
-        if mode == 'tail-batch':
+    def RotatE(self, head, relation, tail, mode):
+        pi = 3.14159265358979323846
+        
+        re_head, im_head = torch.chunk(head, 2, dim=2)
+        re_tail, im_tail = torch.chunk(tail, 2, dim=2)
+
+        #Make phases of relations uniformly distributed in [-pi, pi]
+
+        phase_relation = relation/(self.embedding_range.item()/pi)
+
+        re_relation = torch.cos(phase_relation)
+        im_relation = torch.sin(phase_relation)
+
+        if mode == 'head-batch':
             re_score = re_relation * re_tail + im_relation * im_tail
             im_score = re_relation * im_tail - im_relation * re_tail
-            score2 = re_head * re_score + im_head * im_score
+            re_score = re_score - re_head
+            im_score = im_score - im_head
         else:
             re_score = re_head * re_relation - im_head * im_relation
             im_score = re_head * im_relation + im_head * re_relation
-            score2 = re_score * re_tail + im_score * im_tail
+            re_score = re_score - re_tail
+            im_score = im_score - im_tail
 
-        score2 = score2.sum(dim = 2)
-        
-        
-        score = (score1+score2)/2
+        score = torch.stack([re_score, im_score], dim = 0)
+        score = score.norm(dim = 0)
+
+        score = self.gamma.item() - score.sum(dim = 2)
         return score
         
     
-    def RotatE(self, head, relation, tail, relation_inv, ht, th, mode):
+    def HRotatE(self, head, relation, tail, relation_inv, ht, th, mode):
     #def RotatE(self, head, relation, tail, mode):
         pi = 3.14159265358979323846
         
@@ -395,67 +425,11 @@ class KGEModel(nn.Module):
         
         score = (score1 + score2)/2
         
-        """
-        def get_gpu_memory():
-            _output_to_list = lambda x: x.decode('ascii').split('\n')[:-1]
-            ACCEPTABLE_AVAILABLE_MEMORY = 1024
-            COMMAND = "nvidia-smi --query-gpu=memory.free --format=csv"
-            memory_free_info = _output_to_list(sp.check_output(COMMAND.split()))[1:]
-            memory_free_values = [int(x.split()[0]) for i, x in enumerate(memory_free_info)]
-            print(memory_free_values)
-            return memory_free_values
-
-        get_gpu_memory()
-        """
-        
-
-        
-        
-        
-        #score = score1
+ 
         
         return score
 
-    def pRotatE(self, head, relation, tail, relation_inv, ht, th, mode):
-        pi = 3.14159262358979323846
-        
-        #Make phases of entities and relations uniformly distributed in [-pi, pi]
-
-        phase_head = head/(self.embedding_range.item()/pi)
-        phase_relation = relation/(self.embedding_range.item()/pi)
-        phase_tail = tail/(self.embedding_range.item()/pi)
-        
-
-        if mode == 'head-batch':
-            score1 = phase_head + (phase_relation - phase_tail)
-        else:
-            score1 = (phase_head + phase_relation) - phase_tail
-
-        score1 = torch.sin(score1)            
-        score1 = torch.abs(score1)
-
-        score1 = self.gamma.item() - score1.sum(dim = 2) * self.modulus
-        
-        
-        phase_ht = ht/(self.embedding_range.item()/pi)
-        phase_relation_inv = relation_inv/(self.embedding_range.item()/pi)
-        phase_th = th/(self.embedding_range.item()/pi)
-        
-        if mode == 'tail-batch':
-            score2 = phase_ht + (phase_relation_inv - phase_th)
-        else:
-            score2 = (phase_ht + phase_relation_inv) - phase_th
-
-        score2 = torch.sin(score2)            
-        score2 = torch.abs(score2)
-
-        score2 = self.gamma.item() - score2.sum(dim = 2) * self.modulus
-
-        
-        
-        
-        score = (score1 + score2)/2
-        return score
+   
     
     @staticmethod
     def train_step(model, optimizer, train_iterator, args):
@@ -639,3 +613,124 @@ class KGEModel(nn.Module):
                 metrics[metric] = sum([log[metric] for log in logs])/len(logs)
 
         return metrics
+        
+        
+        
+        
+        """
+        def TransE(self, head, relation, tail, relation_inv, ht, th, mode):
+        if mode == 'head-batch':
+            score1 = head + (relation - tail)
+        else:
+            score1 = (head + relation) - tail
+            
+        if mode == 'tail-batch':
+            score2 = ht + (relation_inv - th)
+        else:
+            score2 = (ht + relation_inv) - th
+
+        score1 = self.gamma.item() - torch.norm(score1, p=1, dim=2)
+        score2 = self.gamma.item() - torch.norm(score2, p=1, dim=2)
+        
+        score = (score1+score2)/2
+        
+        return score
+
+    def DistMult(self, head, relation, tail, relation_inv, ht, th, mode):
+      
+        if mode == 'head-batch':
+            score1 = head * (relation * tail)
+        else:
+            score1 = (head * relation) * tail
+            
+        if mode == 'tail-batch':
+            score2 = ht * (relation_inv * th)
+        else:
+            score2 = (ht * relation_inv) * th
+
+        score1 = score1.sum(dim = 2)
+        score2 = score2.sum(dim = 2)
+        
+        score = (score1+score2)/2
+        return score
+
+    def ComplEx(self, head, relation, tail, relation_inv, ht, th, mode):
+        re_head, im_head = torch.chunk(head, 2, dim=2)
+        re_relation, im_relation = torch.chunk(relation, 2, dim=2)
+        re_tail, im_tail = torch.chunk(tail, 2, dim=2)
+
+        if mode == 'head-batch':
+            re_score = re_relation * re_tail + im_relation * im_tail
+            im_score = re_relation * im_tail - im_relation * re_tail
+            score1 = re_head * re_score + im_head * im_score
+        else:
+            re_score = re_head * re_relation - im_head * im_relation
+            im_score = re_head * im_relation + im_head * re_relation
+            score1 = re_score * re_tail + im_score * im_tail
+
+        score1 = score1.sum(dim = 2)
+        
+        
+        re_head, im_head = torch.chunk(ht, 2, dim=2)
+        re_relation, im_relation = torch.chunk(relation_inv, 2, dim=2)
+        re_tail, im_tail = torch.chunk(th, 2, dim=2)
+        
+        if mode == 'tail-batch':
+            re_score = re_relation * re_tail + im_relation * im_tail
+            im_score = re_relation * im_tail - im_relation * re_tail
+            score2 = re_head * re_score + im_head * im_score
+        else:
+            re_score = re_head * re_relation - im_head * im_relation
+            im_score = re_head * im_relation + im_head * re_relation
+            score2 = re_score * re_tail + im_score * im_tail
+
+        score2 = score2.sum(dim = 2)
+        
+        
+        score = (score1+score2)/2
+        return score
+        
+        
+        
+         def pRotatE(self, head, relation, tail, relation_inv, ht, th, mode):
+        pi = 3.14159262358979323846
+        
+        #Make phases of entities and relations uniformly distributed in [-pi, pi]
+
+        phase_head = head/(self.embedding_range.item()/pi)
+        phase_relation = relation/(self.embedding_range.item()/pi)
+        phase_tail = tail/(self.embedding_range.item()/pi)
+        
+
+        if mode == 'head-batch':
+            score1 = phase_head + (phase_relation - phase_tail)
+        else:
+            score1 = (phase_head + phase_relation) - phase_tail
+
+        score1 = torch.sin(score1)            
+        score1 = torch.abs(score1)
+
+        score1 = self.gamma.item() - score1.sum(dim = 2) * self.modulus
+        
+        
+        phase_ht = ht/(self.embedding_range.item()/pi)
+        phase_relation_inv = relation_inv/(self.embedding_range.item()/pi)
+        phase_th = th/(self.embedding_range.item()/pi)
+        
+        if mode == 'tail-batch':
+            score2 = phase_ht + (phase_relation_inv - phase_th)
+        else:
+            score2 = (phase_ht + phase_relation_inv) - phase_th
+
+        score2 = torch.sin(score2)            
+        score2 = torch.abs(score2)
+
+        score2 = self.gamma.item() - score2.sum(dim = 2) * self.modulus
+
+        
+        
+        
+        score = (score1 + score2)/2
+        return score
+    
+        """
