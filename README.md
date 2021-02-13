@@ -68,7 +68,7 @@ The run.sh script provides an easy way to search hyper-parameters:
 
 **Results of the HRotatE model**
 
-| Dataset | FB15k | FB15k-237 | wn18 | wn18rr | Yago3-10
+| Dataset | FB15k | FB15k-237 | WN18 | WN18RR | Yago3-10
 |-------------|-------------|-------------|-------------|-------------|-------------|
 | MRR | .799 | .338  | .951  |.483 | .497 |
 | HITS@1 | .751 | .243 | .945 | .438 | .399 |
