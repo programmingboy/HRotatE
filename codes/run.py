@@ -38,7 +38,7 @@ def parse_args(args=None):
                         help='Region Id for Countries S1/S2/S3 datasets, DO NOT MANUALLY SET')
     
     parser.add_argument('--data_path', type=str, default=None)
-    parser.add_argument('--model', default='TransE', type=str)
+    parser.add_argument('--model', default='HRotatE', type=str)
     parser.add_argument('-de', '--double_entity_embedding', action='store_true')
     parser.add_argument('-dr', '--double_relation_embedding', action='store_true')
     
