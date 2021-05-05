@@ -45,11 +45,11 @@ CUDA_VISIBLE_DEVICES=0 python -u codes/run.py --do_train \
  --do_valid \
  --do_test \
  --data_path data/FB15k \
- --model RotatE \
+ --model HRotatE \
  -n 128 -b 256 -d 1000 \
  -g 24.0 -a 1.5 -adv \
  -lr 0.0001 --max_steps 150000 \
- -save models/RotatE_FB15k_0 --test_batch_size 16 -de
+ -save models/HRotatE_FB15k_0 --test_batch_size 16 -de
 ```
    Check argparse configuration at codes/run.py for more arguments and more details.
 
