@@ -4,7 +4,6 @@
 
 This is the PyTorch implementation of the [HRotatE] model for knowledge graph embedding (KGE). 
 
-This code is updated version of RotatE code(https://github.com/DeepGraphLearning/KnowledgeGraphEmbedding)
 
 
 **Implemented features**
